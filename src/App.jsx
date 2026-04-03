@@ -25,6 +25,13 @@ const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "21:9"];
 const DURATIONS     = [5, 6, 8, 10];
 const SCOPES        = "https://www.googleapis.com/auth/cloud-platform";
 
+// External API keys are provided via environment variables.  These
+// keys should not be hard‑coded; instead we default to empty strings
+// when missing.  When deploying, set VITE_YOUTUBE_API_KEY and
+// VITE_GEMINI_API_KEY in your environment.
+const YT_API_KEY     = import.meta.env.VITE_YOUTUBE_API_KEY || "";
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY  || "";
+
 // ── Utilities ──────────────────────────────────────────────────────────────────
 const splitS = t =>
   t.replace(/\n+/g, " ")
@@ -461,7 +468,7 @@ export default function App() {
   const [stylePreset,setStylePreset]=useState("cinematic");
   const [customStyle,setCustomStyle]=useState("");
   const [styleImgs,setStyleImgs]   = useState([]);
-  const [ytApiKey,setYtApiKey]     = useState("");
+  const [ytApiKey,setYtApiKey]     = useState(YT_API_KEY);
   const [ytUrl,setYtUrl]           = useState("");
   const [ytFrames,setYtFrames]     = useState([]);
   const [ytMeta,setYtMeta]         = useState(null);
@@ -586,9 +593,17 @@ Analyze:
 
 Output ONLY a single paragraph of 90-130 words starting with "STYLE:". Write it as a direct cinematic prompt a video AI receives. Be concrete — name exact looks: "warm teal-shifted shadows," "Zeiss 35mm at T1.4," "overcast north-facing window light." No bullet points, no preamble, no explanation outside the paragraph.`};
 
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:400,messages:[{role:"user",content:[...imageBlocks,textBlock]}]})});
-      const data=await res.json();
-      const txt=data.content?.map(c=>c.text||"").join("").trim();
+      const parts = [{ text: textBlock.text }, ...imageBlocks.map(img => ({ inlineData: { mimeType: img.source.media_type, data: img.source.data } }))];
+const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${GEMINI_API_KEY}`,{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({
+    contents:[{ role:"user", parts }],
+    generationConfig:{ maxOutputTokens:2048, temperature:0.8 }
+  })
+});
+const data=await res.json();
+const txt=data?.candidates?.[0]?.content?.parts?.map(p=>p.text).join("")?.trim() || "";
       if(!txt) throw new Error("Empty response");
       setYtAnalysis(txt);
     } catch(e){setYtError(`Analysis failed: ${e.message}`);}
@@ -643,14 +658,23 @@ No markdown fences. No explanation outside the array.`
       const sys=buildSys(sents,sd,refNote);
       const usr=[`Write prompts for scene${batch.length>1?"s":""} ${st+1}${batch.length>1?`–${st+batch.length}`:""}:`,"",...batch.map((s,i)=>`[${st+i+1}] "${s}"`),"",`Return a JSON array of exactly ${batch.length} object${batch.length>1?"s":""}.`,`Each prompt must be 75-110 words and fully express the visual language described in the style section.`].join("\n");
       try {
-        const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,system:sys,messages:[{role:"user",content:usr}]})});
-        const data=await res.json(); const txt=data.content?.map(c=>c.text||"").join("")||"";
+        const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({
+    contents:[{role:"user",parts:[{text:`${sys}
+
+${usr}`}]}],
+    generationConfig:{maxOutputTokens:2048,temperature:0.8}
+  })
+});
+const data=await res.json(); const txt=data?.candidates?.[0]?.content?.parts?.map(p=>p.text).join("")||"";
         const parsed=JSON.parse(txt.replace(/```json|```/g,"").trim());
         if(!Array.isArray(parsed)) throw new Error("Response is not an array");
         parsed.forEach((item,i)=>{const idx=st+i;if(idx<all.length&&item?.prompt)all[idx]={...all[idx],...item,veoStatus:"prompt_ready"};});
         setScenes([...all]);
       } catch {
-        batch.forEach((_,i)=>{const idx=st+i;if(idx<all.length)all[idx]={...all[idx],prompt:"[Failed — click ↺ Regenerate]",mood:"—",setting:"—",camera:"—",veoStatus:"error",veoError:"Claude API error"};});
+        batch.forEach((_,i)=>{const idx=st+i;if(idx<all.length)all[idx]={...all[idx],prompt:"[Failed — click ↺ Regenerate]",mood:"—",setting:"—",camera:"—",veoStatus:"error",veoError:"Gemini API error"};});
         setScenes([...all]);
       }
       setProg(Math.round(((b+1)/total)*100));
@@ -681,8 +705,17 @@ No markdown fences. No explanation outside the array.`
       `Return a JSON array of exactly 1 object. Generate a meaningfully different take — vary the shot type or angle while maintaining visual continuity and matching the visual language.`,
     ].join("\n");
     try {
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:600,system:sys,messages:[{role:"user",content:usr}]})});
-      const data=await res.json(); const txt=data.content?.map(c=>c.text||"").join("")||"";
+      const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({
+    contents:[{role:"user",parts:[{text:`${sys}
+
+${usr}`}]}],
+    generationConfig:{maxOutputTokens:1024,temperature:0.8}
+  })
+});
+const data=await res.json(); const txt=data?.candidates?.[0]?.content?.parts?.map(p=>p.text).join("")||"";
       const parsed=JSON.parse(txt.replace(/```json|```/g,"").trim());
       const item=parsed?.[0];
       if(!item?.prompt) throw new Error("No valid prompt returned");
